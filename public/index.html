@@ -1,14 +1,16 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <title>AImend</title>
-  </head>
+  <head><meta charset="utf-8"><title>AImend</title></head>
   <body>
-    <h1>Search</h1>
-    <input id="text" type="text" placeholder="Enter query (e.g., Recommendations related to CAP)" style="width:60%" />
+    <h1>AGRI search proxy</h1>
+    <input id="q" placeholder="Enter query (e.g., Recommendations related to CAP) " style="width:60%">
+    <select id="doc_type">
+      <option value="">Any</option>
+      <option value="RECOMMENDATION">RECOMMENDATION</option>
+      <option value="DRAFT">DRAFT</option>
+    </select>
     <button id="go">Search</button>
-    <div id="out" style="white-space:pre-wrap;margin-top:1rem"></div>
+    <pre id="out" style="white-space:pre-wrap;"></pre>
     <script src="/app.js"></script>
   </body>
 </html>

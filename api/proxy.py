@@ -28,6 +28,27 @@ USER_AGENT = "agri-proxy/1.0"
 
 FALLBACK_EXACT = "I can only search AGRI committee documents; no matching documents found."
 
+# Build strict system + few-shot messages so the worker's LLM call returns
+# either the exact fallback string or a JSON array of query strings.
+SYSTEM_MSG = (
+    "You are an AGRI documents search assistant that only decides whether a user input is a valid search request "
+    "for European Parliament AGRI committee documents. Do not act as a general assistant. If the input is NOT a valid "
+    "AGRI documents search, output exactly this single-line string (no quotes, no extra whitespace, nothing else):\n"
+    "I can only search AGRI committee documents; no matching documents found.\n"
+    "If the input IS a valid AGRI documents search, output only a JSON array of one or more plain search-term strings "
+    "(only the array, nothing else). Each element must be a short query string suitable to run on the AGRI Documents Search page "
+    "(for example: \"CAP final recommendation 2025\", \"CAP Strategic plans amendment time period\"). Do not output explanation, "
+    "markup, reasoning, or any text outside the JSON array. The proxy will reject any output that is not exactly the fallback "
+    "string or a JSON array of strings."
+)
+
+EXAMPLE_USER_1 = "Find final AGRI recommendations about CAP Strategic Plans amendment time period"
+EXAMPLE_ASSISTANT_1 = '["CAP Strategic plans amendment final recommendation","CAP Strategic plans amendment time period recommendation 2025"]'
+
+EXAMPLE_USER_2 = "What is the capital of Belgium?"
+EXAMPLE_ASSISTANT_2 = "I can only search AGRI committee documents; no matching documents found."
+
+
 # Helpers
 def compact_json(obj: dict) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
@@ -159,7 +180,14 @@ def call_worker_classify(user_text: str, debug: bool = False) -> dict:
         return {"ok": False, "error": "server configuration missing"}
     ts = int(time.time())
     nonce = secrets.token_hex(8)
-    messages = [{"role": "user", "content": user_text}]
+    messages = [
+        {"role": "system", "content": SYSTEM_MSG},
+        {"role": "user", "content": EXAMPLE_USER_1},
+        {"role": "assistant", "content": EXAMPLE_ASSISTANT_1},
+        {"role": "user", "content": EXAMPLE_USER_2},
+        {"role": "assistant", "content": EXAMPLE_ASSISTANT_2},
+        {"role": "user", "content": user_text},
+        ]    
     envelope = {"model": MODEL, "messages": messages, "stream": False, "timestamp": ts, "nonce": nonce}
     envelope_json = compact_json(envelope)
     sig = sign_envelope_bytes(envelope_json, SECRET.strip())

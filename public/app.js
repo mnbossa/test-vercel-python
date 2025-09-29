@@ -1,18 +1,19 @@
 document.getElementById("go").addEventListener("click", async () => {
-  const n = document.getElementById("num").value;
+  const text = document.getElementById("text").value;
   const out = document.getElementById("out");
-  out.textContent = "Computing…";
+  out.textContent = "Sending…";
   try {
-    const res = await fetch("/api/test", {
+    const res = await fetch("/api/proxy", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ n })
+      body: JSON.stringify({ text })
     });
     const j = await res.json();
     if (!res.ok) throw new Error(j.error || JSON.stringify(j));
-    out.textContent = "Result: " + j.result;
+    out.textContent = j.reply ?? "No reply field in response";
   } catch (err) {
     out.textContent = "Error: " + err.message;
   }
 });
+
 

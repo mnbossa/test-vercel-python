@@ -2,6 +2,6 @@
   "routes": [
     { "src": "/", "dest": "/public/index.html" },
     { "src": "/app.js", "dest": "/public/app.js" },
-    { "src": "/api/(.*)", "dest": "/api/test.py" }
+    { "src": "/api/(.*)", "dest": "/api/proxy.py" }
   ]
 }

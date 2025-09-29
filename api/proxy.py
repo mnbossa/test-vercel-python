@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import secrets
 import requests
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -12,11 +13,7 @@ app = Flask(__name__)
 WORKER_URL = os.environ.get("WORKER_URL")
 SECRET = os.environ.get("SECRET")
 MODEL = os.environ.get("MODEL", "HuggingFaceTB/SmolLM3-3B:hf-inference")
-# Optional: base URL where candidate AGRI documents are listed (for worker / debugging)
 AGRI_DOCS_INDEX = os.environ.get("AGRI_DOCS_INDEX", "https://www.europarl.europa.eu/committees/en/agri/documents/latest-documents")
-
-if not WORKER_URL or not SECRET:
-    app.logger.warning("WORKER_URL or SECRET environment variable not set")
 
 SYSTEM_INSTRUCTION = (
     "You are a search assistant that only uses European Parliament AGRI committee documents provided in the context. "
@@ -26,19 +23,76 @@ SYSTEM_INSTRUCTION = (
     "Output must be a JSON array of matches '[{\"title\":\"...\",\"url\":\"...\",\"snippet\":\"...\",\"matched_terms\":\"...\"}]'."
 )
 
-def make_envelope(model: str, user_text: str, candidates: list | None = None) -> dict:
+# network params
+HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "10"))
+VERIFY_TLS = os.environ.get("VERIFY_TLS", "true").lower() != "false"
+USER_AGENT = "agri-proxy/1.0"
+
+if not WORKER_URL or not SECRET:
+    app.logger.warning("WORKER_URL or SECRET environment variable not set")
+
+def compact_json(obj: dict) -> str:
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+def sign_envelope(envelope_json: str, secret: str) -> str:
+    mac = hmac.new(secret.encode("utf-8"), envelope_json.encode("utf-8"), hashlib.sha256)
+    return f"sha256={mac.hexdigest()}"
+
+def normalize_url(u: str) -> str | None:
+    try:
+        p = urlparse(u)
+        if p.scheme not in ("http", "https") or not p.netloc:
+            return None
+        return p.geturl()
+    except Exception:
+        return None
+
+def url_is_alive(url: str) -> bool:
+    # Try HEAD, fallback to GET limited bytes
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        r = requests.head(url, timeout=HTTP_TIMEOUT, allow_redirects=True, headers=headers, verify=VERIFY_TLS)
+        if r.status_code >= 200 and r.status_code < 400:
+            return True
+        # Some servers reject HEAD; try small GET
+        r = requests.get(url, timeout=HTTP_TIMEOUT, stream=True, headers=headers, verify=VERIFY_TLS)
+        return 200 <= r.status_code < 400
+    except requests.RequestException:
+        return False
+
+def sanitize_candidates(raw_candidates: list) -> list:
     """
-    envelope messages: system first, then user. Optionally include a 'candidates' field
-    that lists candidate documents the worker/LLM can search against.
+    Accepts candidate dicts from the caller. Verifies URL format and reachability.
+    Returns a filtered list containing only reachable candidates with exact title and url preserved.
     """
+    out = []
+    for c in raw_candidates:
+        if not isinstance(c, dict):
+            continue
+        title = c.get("title")
+        url = c.get("url")
+        if not title or not url:
+            continue
+        url_norm = normalize_url(url)
+        if not url_norm:
+            continue
+        if url_is_alive(url_norm):
+            # preserve only title and url and optional text/snippet if provided
+            entry = {"title": title, "url": url_norm}
+            if "text" in c:
+                entry["text"] = c["text"]
+            if "snippet" in c:
+                entry["snippet"] = c["snippet"]
+            out.append(entry)
+    return out
+
+def make_envelope(model: str, system_instruction: str, user_text: str, candidates: list | None = None) -> dict:
     ts = int(time.time())
     nonce = secrets.token_hex(8)
-
     messages = [
-        {"role": "system", "content": SYSTEM_INSTRUCTION},
+        {"role": "system", "content": system_instruction},
         {"role": "user", "content": user_text}
     ]
-
     envelope = {
         "model": model,
         "messages": messages,
@@ -46,19 +100,38 @@ def make_envelope(model: str, user_text: str, candidates: list | None = None) ->
         "timestamp": ts,
         "nonce": nonce
     }
-
-    # If candidate documents are provided, attach them under a separate field so the downstream worker
-    # and/or model can access them (do not rely on implicit web fetching by the model).
     if candidates:
-        # candidates should be a list of {"title": "...", "url": "...", "text": "..."} or similar
         envelope["candidates"] = candidates
-
     return envelope
 
-def sign_envelope(envelope_json: str, secret: str) -> str:
-    mac = hmac.new(secret.encode("utf-8"), envelope_json.encode("utf-8"), hashlib.sha256)
-    sig = mac.hexdigest()
-    return f"sha256={sig}"
+def validate_worker_reply(reply_value):
+    # Accept exact fallback string or JSON array of objects with required keys
+    fallback = "I can only search AGRI committee documents; no matching documents found."
+    if isinstance(reply_value, str) and reply_value.strip() == fallback:
+        return {"ok": True, "is_fallback": True, "value": reply_value}
+    # Try parse if it's a JSON string
+    arr = None
+    if isinstance(reply_value, str):
+        try:
+            arr = json.loads(reply_value)
+        except Exception:
+            return {"ok": False, "error": "reply not valid JSON array nor exact fallback string"}
+    elif isinstance(reply_value, list):
+        arr = reply_value
+    else:
+        return {"ok": False, "error": "reply is neither string nor list"}
+
+    if not isinstance(arr, list):
+        return {"ok": False, "error": "reply JSON is not an array"}
+
+    # validate each entry
+    for i, item in enumerate(arr):
+        if not isinstance(item, dict):
+            return {"ok": False, "error": f"array element {i} not an object"}
+        for key in ("title", "url", "snippet", "matched_terms"):
+            if key not in item:
+                return {"ok": False, "error": f"array element {i} missing key '{key}'"}
+    return {"ok": True, "is_fallback": False, "value": arr}
 
 @app.route("/api/proxy", methods=["POST"])
 def proxy():
@@ -67,22 +140,22 @@ def proxy():
 
     body = request.get_json(silent=True) or {}
     user_text = body.get("text")
-    # Accept optional 'candidates' list from frontend (preferred) or let worker discover using AGRI_DOCS_INDEX
-    candidates = body.get("candidates")
+    raw_candidates = body.get("candidates")
 
     if not user_text or not isinstance(user_text, str):
         return jsonify({"error": "missing or invalid text field"}), 400
 
-    # Build envelope: include candidates if provided
-    envelope = make_envelope(MODEL, user_text, candidates=candidates)
-    # Use compact JSON for deterministic signing
-    envelope_json = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
+    candidates = None
+    if isinstance(raw_candidates, list):
+        candidates = sanitize_candidates(raw_candidates)
 
+    envelope = make_envelope(MODEL, SYSTEM_INSTRUCTION, user_text, candidates=candidates)
+    envelope_json = compact_json(envelope)
     signature = sign_envelope(envelope_json, SECRET)
     headers = {"Content-Type": "application/json", "X-Signature": signature}
 
     try:
-        resp = requests.post(f"{WORKER_URL}/chat", headers=headers, data=envelope_json, timeout=30)
+        resp = requests.post(f"{WORKER_URL.rstrip('/')}/chat", headers=headers, data=envelope_json.encode("utf-8"), timeout=30)
     except requests.RequestException as e:
         return jsonify({"error": "failed to reach worker", "detail": str(e)}), 502
 
@@ -94,83 +167,23 @@ def proxy():
     if resp.status_code < 200 or resp.status_code >= 300:
         return jsonify({"error": "worker error", "status_code": resp.status_code, "worker_response": resp_json}), 502
 
-    # Expect worker to return top-level "reply" and/or the JSON array in reply or raw
-    # If the worker forwarded the model output in resp_json["reply"] (string), return it raw.
-    reply = resp_json.get("reply")
-    raw = resp_json.get("raw")
-    # If the worker returned the required JSON array in raw or reply, forward it
-    return jsonify({"reply": reply, "raw": raw}), 200
+    # Worker expected to return top-level 'reply' string (as in your example) or already parsed JSON in 'raw'
+    reply_field = resp_json.get("reply")
+    raw_field = resp_json.get("raw")
 
+    # prefer reply_field (string) when present
+    candidate_value = reply_field if reply_field is not None else raw_field
 
-# import os
-# import time
-# import json
-# import hmac
-# import hashlib
-# import secrets
-# import requests
-# from flask import Flask, request, jsonify
+    if candidate_value is None:
+        return jsonify({"error": "worker response missing 'reply' and 'raw' fields", "worker_response": resp_json}), 502
 
-# app = Flask(__name__)
+    validated = validate_worker_reply(candidate_value)
+    if not validated["ok"]:
+        return jsonify({"error": "invalid worker reply", "detail": validated.get("error"), "worker_response": candidate_value}), 502
 
-# WORKER_URL = os.environ.get("WORKER_URL")
-# SECRET = os.environ.get("SECRET")
-# MODEL = os.environ.get("MODEL", "HuggingFaceTB/SmolLM3-3B:hf-inference")
+    # If fallback, return exact fallback as reply and empty matches
+    if validated["is_fallback"]:
+        return jsonify({"reply": validated["value"], "matches": []}), 200
 
-# if not WORKER_URL or not SECRET:
-#     app.logger.warning("WORKER_URL or SECRET environment variable not set")
-
-# def make_envelope(model: str, user_text: str) -> dict:
-#     ts = int(time.time())
-#     nonce = secrets.token_hex(8)
-#     messages = [{"role": "user", "content": user_text}]
-#     envelope = {
-#         "model": model,
-#         "messages": messages,
-#         "stream": False,
-#         "timestamp": ts,
-#         "nonce": nonce
-#     }
-#     return envelope
-
-# def sign_envelope(envelope_json: str, secret: str) -> str:
-#     mac = hmac.new(secret.encode("utf-8"), envelope_json.encode("utf-8"), hashlib.sha256)
-#     sig = mac.hexdigest()
-#     return f"sha256={sig}"
-
-# @app.route("/api/proxy", methods=["POST"])
-# def proxy():
-#     if not WORKER_URL or not SECRET:
-#         return jsonify({"error": "server configuration missing"}), 500
-
-#     body = request.get_json(silent=True) or {}
-#     user_text = body.get("text")
-#     if not user_text or not isinstance(user_text, str):
-#         return jsonify({"error": "missing or invalid text field"}), 400
-
-#     envelope = make_envelope(MODEL, user_text)
-#     envelope_json = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
-
-#     signature = sign_envelope(envelope_json, SECRET)
-#     headers = {"Content-Type": "application/json", "X-Signature": signature}
-
-#     try:
-#         resp = requests.post(f"{WORKER_URL}/chat", headers=headers, data=envelope_json, timeout=30)
-#     except requests.RequestException as e:
-#         return jsonify({"error": "failed to reach worker", "detail": str(e)}), 502
-
-#     # propagate non-JSON responses as error
-#     try:
-#         resp_json = resp.json()
-#     except ValueError:
-#         return jsonify({"error": "worker returned non-json", "status_code": resp.status_code, "body": resp.text}), 502
-
-#     # If worker returned an error-like status, forward it
-#     if resp.status_code < 200 or resp.status_code >= 300:
-#         return jsonify({"error": "worker error", "status_code": resp.status_code, "worker_response": resp_json}), 502
-
-#     # expected shape based on your example: top-level "reply" and "raw"
-#     reply = resp_json.get("reply")
-#     raw = resp_json.get("raw")
-#     return jsonify({"reply": reply, "raw": raw}), 200
-
+    # validated.value is an array of match objects
+    return jsonify({"reply": "matches", "matches": validated["value"]}), 200

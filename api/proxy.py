@@ -1,12 +1,12 @@
 import os
-import re
 import time
 import json
 import hmac
 import hashlib
 import secrets
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -16,6 +16,9 @@ SECRET = os.environ.get("SECRET")
 MODEL = os.environ.get("MODEL", "HuggingFaceTB/SmolLM3-3B:hf-inference")
 AGRI_DOCS_INDEX = os.environ.get("AGRI_DOCS_INDEX", "https://www.europarl.europa.eu/committees/en/agri/documents/latest-documents")
 
+HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "10"))
+USER_AGENT = "agri-proxy/1.0"
+
 SYSTEM_INSTRUCTION = (
     "You are a search assistant that only uses European Parliament AGRI committee documents provided in the context. "
     "You must not invent or infer document titles or links. "
@@ -23,11 +26,6 @@ SYSTEM_INSTRUCTION = (
     "If none match, reply exactly: 'I can only search AGRI committee documents; no matching documents found.' "
     "Output must be a JSON array of matches '[{\"title\":\"...\",\"url\":\"...\",\"snippet\":\"...\",\"matched_terms\":\"...\"}]'."
 )
-
-# network params
-HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "10"))
-VERIFY_TLS = os.environ.get("VERIFY_TLS", "true").lower() != "false"
-USER_AGENT = "agri-proxy/1.0"
 
 if not WORKER_URL or not SECRET:
     app.logger.warning("WORKER_URL or SECRET environment variable not set")
@@ -39,9 +37,10 @@ def sign_envelope(envelope_json: str, secret: str) -> str:
     mac = hmac.new(secret.encode("utf-8"), envelope_json.encode("utf-8"), hashlib.sha256)
     return f"sha256={mac.hexdigest()}"
 
-def normalize_url(u: str) -> str | None:
+def normalize_url(u: str, base: str = AGRI_DOCS_INDEX) -> str | None:
     try:
-        p = urlparse(u)
+        joined = urljoin(base, u)
+        p = urlparse(joined)
         if p.scheme not in ("http", "https") or not p.netloc:
             return None
         return p.geturl()
@@ -49,49 +48,79 @@ def normalize_url(u: str) -> str | None:
         return None
 
 def url_is_alive(url: str) -> bool:
-    # Try HEAD, fallback to GET limited bytes
     headers = {"User-Agent": USER_AGENT}
     try:
-        r = requests.head(url, timeout=HTTP_TIMEOUT, allow_redirects=True, headers=headers, verify=VERIFY_TLS)
-        if r.status_code >= 200 and r.status_code < 400:
+        r = requests.head(url, timeout=HTTP_TIMEOUT, allow_redirects=True, headers=headers)
+        if 200 <= r.status_code < 400:
             return True
-        # Some servers reject HEAD; try small GET
-        r = requests.get(url, timeout=HTTP_TIMEOUT, stream=True, headers=headers, verify=VERIFY_TLS)
+        r = requests.get(url, timeout=HTTP_TIMEOUT, stream=True, headers=headers)
         return 200 <= r.status_code < 400
     except requests.RequestException:
         return False
 
-def sanitize_candidates(raw_candidates: list) -> list:
+def scrape_agri_latest(max_candidates: int = 40) -> list:
     """
-    Accepts candidate dicts from the caller. Verifies URL format and reachability.
-    Returns a filtered list containing only reachable candidates with exact title and url preserved.
+    Scrape AGRI latest-documents listing for title + URL + short snippet.
+    Return sanitized candidates list ready to include in envelope.
     """
-    out = []
-    for c in raw_candidates:
-        if not isinstance(c, dict):
-            continue
-        title = c.get("title")
-        url = c.get("url")
-        if not title or not url:
-            continue
-        url_norm = normalize_url(url)
-        if not url_norm:
-            continue
-        if url_is_alive(url_norm):
-            # preserve only title and url and optional text/snippet if provided
-            entry = {"title": title, "url": url_norm}
-            if "text" in c:
-                entry["text"] = c["text"]
-            if "snippet" in c:
-                entry["snippet"] = c["snippet"]
-            out.append(entry)
-    return out
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        r = requests.get(AGRI_DOCS_INDEX, timeout=HTTP_TIMEOUT, headers=headers)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        app.logger.warning("Failed to fetch AGRI index: %s", e)
+        return []
 
-def make_envelope(model: str, system_instruction: str, user_text: str, candidates: list | None = None) -> dict:
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    # Heuristic: the page lists documents as links with document IDs and PDF/DOC links.
+    # Find anchor tags inside the documents listing area.
+    candidates = []
+    seen_urls = set()
+
+    # Narrow scope: search for list-like containers and anchors
+    # This is robust to small markup changes: we look for anchors with '/doceo/document' or anchors under the documents listing block.
+    anchors = soup.find_all("a", href=True)
+    for a in anchors:
+        href = a["href"].strip()
+        title_text = a.get_text(separator=" ", strip=True)
+        # Skip empty text anchors
+        if not title_text:
+            continue
+        # Only consider links that look like document pages or files
+        if "/doceo/document" not in href and "/documents/" not in href and not href.lower().endswith((".pdf", ".doc", ".docx")):
+            continue
+        url_norm = normalize_url(href)
+        if not url_norm or url_norm in seen_urls:
+            continue
+        # Try to get a short snippet: the anchor's parent text or nearby sibling text
+        snippet = ""
+        parent = a.parent
+        if parent:
+            snippet = parent.get_text(separator=" ", strip=True).replace(title_text, "").strip()
+        if not snippet:
+            # try next sibling
+            sib = a.find_next_sibling(text=True)
+            if sib:
+                snippet = str(sib).strip()
+        if not snippet:
+            snippet = title_text
+
+        # Check URL liveness for documents that are absolute or file-like
+        if url_is_alive(url_norm):
+            candidates.append({"title": title_text, "url": url_norm, "snippet": snippet})
+            seen_urls.add(url_norm)
+        # stop when we have enough
+        if len(candidates) >= max_candidates:
+            break
+
+    return candidates
+
+def make_envelope(model: str, user_text: str, candidates: list | None = None) -> dict:
     ts = int(time.time())
     nonce = secrets.token_hex(8)
     messages = [
-        {"role": "system", "content": system_instruction},
+        {"role": "system", "content": SYSTEM_INSTRUCTION},
         {"role": "user", "content": user_text}
     ]
     envelope = {
@@ -105,57 +134,17 @@ def make_envelope(model: str, system_instruction: str, user_text: str, candidate
         envelope["candidates"] = candidates
     return envelope
 
-def validate_worker_reply(reply_value):
-    # Accept exact fallback string or JSON array of objects with required keys
-    fallback = "I can only search AGRI committee documents; no matching documents found."
-    if isinstance(reply_value, str) and reply_value.strip() == fallback:
-        return {"ok": True, "is_fallback": True, "value": reply_value}
-    # Try parse if it's a JSON string
-    arr = None
-    if isinstance(reply_value, str):
-        try:
-            arr = json.loads(reply_value)
-        except Exception:
-            return {"ok": False, "error": "reply not valid JSON array nor exact fallback string"}
-    elif isinstance(reply_value, list):
-        arr = reply_value
-    else:
-        return {"ok": False, "error": "reply is neither string nor list"}
-
-    if not isinstance(arr, list):
-        return {"ok": False, "error": "reply JSON is not an array"}
-
-    # validate each entry
-    for i, item in enumerate(arr):
-        if not isinstance(item, dict):
-            return {"ok": False, "error": f"array element {i} not an object"}
-        for key in ("title", "url", "snippet", "matched_terms"):
-            if key not in item:
-                return {"ok": False, "error": f"array element {i} missing key '{key}'"}
-    return {"ok": True, "is_fallback": False, "value": arr}
-
-FALLBACK_EXACT = "I can only search AGRI committee documents; no matching documents found."
-
-def try_extract_json_array_from_text(s: str):
-    """
-    Attempts to find the first JSON array in string s and parse it.
-    Returns (parsed_array or None, error_message_or_none)
-    """
-    if not isinstance(s, str):
-        return None, "not a string"
-    # quick check: exact fallback
-    if s.strip() == FALLBACK_EXACT:
+def extract_json_array_from_text(s: str):
+    # tolerant extraction: look for first '[' ... last ']' and parse
+    s = s.strip()
+    if s == "I can only search AGRI committee documents; no matching documents found.":
         return "FALLBACK", None
-
-    # try direct JSON parse first
     try:
         j = json.loads(s)
         if isinstance(j, list):
             return j, None
     except Exception:
         pass
-
-    # try to extract substring between first '[' and last ']'
     first = s.find('[')
     last = s.rfind(']')
     if first == -1 or last == -1 or last <= first:
@@ -165,7 +154,7 @@ def try_extract_json_array_from_text(s: str):
         j = json.loads(candidate)
         if isinstance(j, list):
             return j, None
-        return None, "extracted JSON not an array"
+        return None, "extracted JSON not array"
     except Exception as e:
         return None, f"json parse error: {e}"
 
@@ -187,16 +176,17 @@ def proxy():
 
     body = request.get_json(silent=True) or {}
     user_text = body.get("text")
-    raw_candidates = body.get("candidates")
-
     if not user_text or not isinstance(user_text, str):
         return jsonify({"error": "missing or invalid text field"}), 400
 
-    candidates = None
-    if isinstance(raw_candidates, list):
-        candidates = sanitize_candidates(raw_candidates)
+    # Try to fetch candidates from AGRI index
+    candidates = scrape_agri_latest()
+    if not candidates:
+        app.logger.warning("No candidates scraped from AGRI index; proceeding without candidates")
+    else:
+        app.logger.info("Scraped %d candidate documents from AGRI index", len(candidates))
 
-    envelope = make_envelope(MODEL, SYSTEM_INSTRUCTION, user_text, candidates=candidates)
+    envelope = make_envelope(MODEL, user_text, candidates=candidates if candidates else None)
     envelope_json = compact_json(envelope)
     signature = sign_envelope(envelope_json, SECRET)
     headers = {"Content-Type": "application/json", "X-Signature": signature}
@@ -214,39 +204,32 @@ def proxy():
     if resp.status_code < 200 or resp.status_code >= 300:
         return jsonify({"error": "worker error", "status_code": resp.status_code, "worker_response": resp_json}), 502
 
-    # Worker expected to return top-level 'reply' string (as in your example) or already parsed JSON in 'raw'
     reply_field = resp_json.get("reply")
     raw_field = resp_json.get("raw")
-
-    # prefer reply_field (string) when present
     candidate_value = reply_field if reply_field is not None else raw_field
     if candidate_value is None:
         return jsonify({"error":"worker response missing 'reply' and 'raw'","worker_response":resp_json}), 502
-    
-    # Normalize candidate_value to string if it's not
+
+    # Normalize to string for tolerant extraction
     if not isinstance(candidate_value, str):
-        # try to serialize structured raw_field into string for extraction
         try:
             candidate_value = json.dumps(candidate_value)
         except Exception:
             candidate_value = str(candidate_value)
-    
-    extracted, err = try_extract_json_array_from_text(candidate_value)
+
+    extracted, err = extract_json_array_from_text(candidate_value)
     if extracted == "FALLBACK":
-        # map to friendly message
         return jsonify({"reply": "No documents found", "matches": []}), 200
     if extracted is None:
-        # preserve raw for debugging in logs
         app.logger.warning("Worker reply could not be parsed as JSON array: %s", err)
         return jsonify({"error":"invalid worker reply","detail":err,"worker_response":candidate_value}), 502
-    
+
     ok, v_err = validate_matches_array(extracted)
     if not ok:
         app.logger.warning("Worker returned array but validation failed: %s", v_err)
         return jsonify({"error":"invalid worker reply","detail":v_err,"worker_response":extracted}), 502
 
-    # Valid array
     if len(extracted) == 0:
         return jsonify({"reply":"No documents found","matches":[]}), 200
-    
+
     return jsonify({"reply":"matches","matches":extracted}), 200

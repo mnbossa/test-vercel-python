@@ -1,9 +1,12 @@
 <!doctype html>
 <html>
-  <head><meta charset="utf-8"><title>AImend</title></head>
+  <head>
+    <meta charset="utf-8">
+    <title>AImend</title>
+  </head>
   <body>
     <h1>AGRI search proxy</h1>
-    <input id="q" placeholder="Enter query (e.g., Recommendations related to CAP) " style="width:60%">
+    <input id="q" placeholder="Enter query (e.g., Recommendations related to CAP)" style="width:60%">
     <select id="doc_type">
       <option value="">Any</option>
       <option value="RECOMMENDATION">RECOMMENDATION</option>
@@ -11,6 +14,8 @@
     </select>
     <button id="go">Search</button>
     <pre id="out" style="white-space:pre-wrap;"></pre>
+
+    <!-- Load script after DOM elements -->
     <script src="/app.js"></script>
   </body>
 </html>

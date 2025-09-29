@@ -203,27 +203,34 @@ def call_worker_classify(user_text: str, debug: bool = False) -> dict:
         logger.error("Error calling worker: %s", e)
         return {"ok": False, "error": "worker unreachable", "detail": str(e)}
     raw_text = resp.text or ""
-    # If non-2xx, return error with snippet
+    # If resp.status_code indicates error, return diagnostic as before
     if resp.status_code < 200 or resp.status_code >= 300:
         logger.error("Worker returned status %s body_head=%s", resp.status_code, raw_text[:2000])
         return {"ok": False, "error": "worker error", "status_code": resp.status_code, "worker_body": raw_text[:2000], "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}}
-    # Strict parsing
-    parsed, err = try_extract_queries_from_text(raw_text)
-    if parsed == "FALLBACK":
-        result = {"ok": True, "type": "fallback", "message": FALLBACK_EXACT}
-    elif parsed is None:
-        result = {"ok": False, "error": "invalid worker reply", "detail": err, "worker_body": raw_text[:2000], "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}}
-    else:
-        # parsed is list of queries
-        if not isinstance(parsed, list) or len(parsed) == 0:
-            result = {"ok": True, "type": "fallback", "message": FALLBACK_EXACT}
+
+    # Prefer the worker's JSON "reply" field when present
+    worker_reply_str = None
+    try:
+        resp_json = resp.json()
+        if isinstance(resp_json, dict) and "reply" in resp_json:
+            worker_reply_str = str(resp_json.get("reply", "")).strip()
         else:
-            result = {"ok": True, "type": "queries", "queries": parsed}
-    # Attach debug fields to result only if requested
-    if debug:
-        result.setdefault("debug_info", {})
-        result["debug_info"].update({"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target, "worker_body_head": raw_text[:2000], "worker_status": resp.status_code})
-    return result
+            # fallback to raw text if JSON has no reply field
+            worker_reply_str = raw_text.strip()
+    except ValueError:
+        # not JSON, use raw text
+        worker_reply_str = raw_text.strip()
+
+    # Now run the strict parser on the extracted worker reply string
+    parsed, err = try_extract_queries_from_text(worker_reply_str)
+    if parsed == "FALLBACK":
+        return {"ok": True, "type": "fallback", "message": FALLBACK_EXACT}
+    if parsed is None:
+        return {"ok": False, "error": "invalid worker reply", "detail": err, "worker_body": worker_reply_str[:2000], "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target, "worker_raw_head": raw_text[:2000]}}
+    # parsed is list of strings
+    if not isinstance(parsed, list) or len(parsed) == 0:
+        return {"ok": True, "type": "fallback", "message": FALLBACK_EXACT}
+    return {"ok": True, "type": "queries", "queries": parsed}
 
 @app.route("/api/proxy", methods=["POST"])
 def proxy():

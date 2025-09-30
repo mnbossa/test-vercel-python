@@ -271,6 +271,81 @@ def call_worker_classify(user_text: str, system_msg = None, debug: bool = False)
 
     return result
 
+def call_worker(user_text: str, system_msg: str | None = None, debug: bool = False) -> dict:
+    """
+    Minimal call that forwards messages to the Cloudflare Worker and returns
+    the worker's 'reply' content verbatim. Returns a dict:
+      - ok: bool
+      - reply: str (when ok)
+      - worker_body: parsed JSON (when debug or on error)
+      - status_code: int (worker HTTP status)
+      - error/detail keys on failure
+    """
+    if not WORKER_URL or not SECRET:
+        return {"ok": False, "error": "server configuration missing"}
+
+    ts = int(time.time())
+    nonce = secrets.token_hex(8)
+    # choose system message provided by client or None (send only if present)
+    messages = []
+    if system_msg and isinstance(system_msg, str) and system_msg.strip():
+        messages.append({"role": "system", "content": system_msg})
+    # send just one user message (keep examples optional; current worker will forward whatever you send)
+    messages.append({"role": "user", "content": user_text})
+
+    envelope = {"model": MODEL, "messages": messages, "stream": False, "timestamp": ts, "nonce": nonce}
+    envelope_json = compact_json(envelope)
+    sig = sign_envelope_bytes(envelope_json, SECRET.strip())
+    target = WORKER_URL.rstrip("/") + "/chat"
+    headers = {"Content-Type": "application/json", "X-Signature": sig}
+
+    logger.info("call_worker -> target=%s", target)
+    logger.info("envelope_head=%s", envelope_json[:800])
+    logger.info("signature_head=%s", sig[:120])
+
+    try:
+        resp = requests.post(target, headers=headers, data=envelope_json.encode("utf-8"), timeout=30)
+    except Exception as e:
+        logger.error("Error calling worker: %s", e)
+        return {"ok": False, "error": "worker unreachable", "detail": str(e)}
+
+    raw_text = resp.text or ""
+    status = resp.status_code
+
+    # if non-2xx return error + debug snippet
+    if status < 200 or status >= 300:
+        logger.error("Worker returned status %s body_head=%s", status, raw_text[:2000])
+        return {
+            "ok": False,
+            "error": "worker error",
+            "status_code": status,
+            "worker_body": raw_text[:2000],
+            "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}
+        }
+
+    # Try parse JSON and extract reply field if present
+    try:
+        body = resp.json()
+    except Exception:
+        # not JSON: return raw text as reply when debug requested, else error
+        if debug:
+            return {"ok": True, "reply": raw_text, "worker_body": raw_text, "status_code": status, "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}}
+        return {"ok": False, "error": "worker returned non-json", "worker_body": raw_text[:2000]}
+
+    # Extract reply
+    if isinstance(body, dict) and "reply" in body:
+        reply = body.get("reply")
+        result = {"ok": True, "reply": reply, "status_code": status}
+        if debug:
+            result["worker_body"] = body
+            result["debug_info"] = {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}
+        return result
+
+    # If no reply field, return body under worker_body (debug) or error
+    if debug:
+        return {"ok": True, "reply": json.dumps(body), "worker_body": body, "status_code": status, "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}}
+    return {"ok": False, "error": "worker did not include reply", "worker_body": json.dumps(body)[:2000]}
+
 @app.route("/api/proxy", methods=["POST"])
 def proxy():
     body = request.get_json(silent=True) or {}
@@ -281,8 +356,23 @@ def proxy():
         return jsonify({"error": "missing or invalid text field"}), 400
     # Classify via worker
     system_msg = body.get("system_msg")
-    worker_ret = call_worker_classify(user_text, system_msg, debug=debug)
-    return jsonify(worker_ret), 200
+    # worker_ret = call_worker_classify(user_text, system_msg, debug=debug)
+    worker_ret = call_worker(user_text, system_msg=system_msg, debug=debug)
+    if not worker_ret.get("ok"):
+        # include debug info when present
+        err_payload = {"error": "worker call failed", **{k: v for k, v in worker_ret.items() if k != "worker_body"}}
+        if debug and "worker_body" in worker_ret:
+            err_payload["worker_body"] = worker_ret["worker_body"]
+        return jsonify(err_payload), 502
+
+    # Success: return worker's reply verbatim
+    payload = {"reply": worker_ret.get("reply")}
+    if debug:
+        payload["debug_info"] = worker_ret.get("debug_info", {})
+        payload["worker_body"] = worker_ret.get("worker_body")
+        payload["status_code"] = worker_ret.get("status_code")
+    return jsonify(payload), 200
+    
     # if not worker_ret.get("ok"):
     #     # If debug requested, pass debug_info through
     #     error_payload = {"error": "worker classification failed", "detail": worker_ret}

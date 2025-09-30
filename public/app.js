@@ -1,33 +1,75 @@
+// public/app.js
+const DEFAULT_SYSTEM_MSG = `You are an AGRI documents search assistant that only decides whether a user input is a valid search request for European Parliament AGRI committee documents. Do not act as a general assistant. If the input is NOT a valid AGRI documents search, output exactly this single-line string (no quotes, no extra whitespace, nothing else):
+I can only search AGRI committee documents; no matching documents found.
+If the input IS a valid AGRI documents search, output only a JSON array of one or more plain search-term strings (only the array, nothing else). Each element must be a short query string suitable to run on the AGRI Documents Search page (for example: "CAP final recommendation 2025", "CAP Strategic plans amendment time period"). Do not output explanation, markup, reasoning, or any text outside the JSON array. The proxy will reject any output that is not exactly the fallback string or a JSON array of strings.`;
+
+function setSystemTextarea(val) {
+  const el = document.getElementById("system_msg");
+  if (el) el.value = val;
+}
+
+function loadSystemMsg() {
+  const stored = localStorage.getItem("agri_system_msg");
+  setSystemTextarea(stored || DEFAULT_SYSTEM_MSG);
+}
+
+function saveSystemMsg() {
+  const val = document.getElementById("system_msg").value;
+  localStorage.setItem("agri_system_msg", val);
+  console.info("Saved system message to localStorage (starts):", val.slice(0,200));
+}
+
+function resetSystemMsg() {
+  localStorage.removeItem("agri_system_msg");
+  setSystemTextarea(DEFAULT_SYSTEM_MSG);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  loadSystemMsg();
+
+  document.getElementById("save_sys").addEventListener("click", () => {
+    saveSystemMsg();
+    const out = document.getElementById("out");
+    out.textContent = "System message saved locally.";
+  });
+
+  document.getElementById("reset_sys").addEventListener("click", () => {
+    resetSystemMsg();
+    const out = document.getElementById("out");
+    out.textContent = "System message reset to default.";
+  });
+
   const go = document.getElementById("go");
-  const out = document.getElementById("out");
-
-  if (!go) {
-    console.error("Missing #go button");
-    return;
-  }
-
   go.addEventListener("click", async () => {
     const qEl = document.getElementById("q");
     const docTypeEl = document.getElementById("doc_type");
+    const debugEl = document.getElementById("debug");
+    const out = document.getElementById("out");
 
     if (!qEl) {
       out.textContent = "Client error: missing input element #q";
-      console.error("Missing element #q");
       return;
     }
-
     const q = qEl.value;
+    if (!q || q.trim().length === 0) {
+      out.textContent = "Please enter a query.";
+      return;
+    }
     const doc_type = docTypeEl ? docTypeEl.value || undefined : undefined;
+    const debug = debugEl ? debugEl.checked : false;
+    // include system_msg if user saved one (prefer local value)
+    const system_msg = document.getElementById("system_msg").value || undefined;
 
     out.textContent = "Sending request… (check console and Network tab)";
-    console.info("UI: sending search", { q, doc_type });
+    console.info("UI: sending search", { q, doc_type, debug, has_system: !!system_msg });
 
     try {
+      const payload = { text: q, doc_type, debug };
+      if (system_msg) payload.system_msg = system_msg;
       const res = await fetch("/api/proxy", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ text: q, doc_type, debug: true })
+        body: JSON.stringify(payload)
       });
       console.info("Fetch completed", { ok: res.ok, status: res.status });
       const text = await res.text();
@@ -50,63 +92,10 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         out.textContent = j.reply || "No documents found";
       }
-      if (j.debug_info) {
-        console.info("Debug info from server:", j.debug_info);
-      }
+      if (j.debug_info) console.info("Debug info from server:", j.debug_info);
     } catch (err) {
       console.error("Fetch failed", err);
       out.textContent = "Fetch failed: " + (err.message || String(err));
     }
   });
 });
-
-// document.getElementById("go").addEventListener("click", async () => {
-//   const text = document.getElementById("text").value;
-//   const out = document.getElementById("out");
-//   out.innerHTML = "Searching…";
-//   try {
-//     const res = await fetch("/api/proxy", {
-//       method: "POST",
-//       headers: {"Content-Type": "application/json"},
-//       body: JSON.stringify({ text })
-//     });
-//     const j = await res.json();
-//     if (!res.ok) throw new Error(j.error || JSON.stringify(j));
-//     if (j.matches && j.matches.length > 0) {
-//       // Render each match with Title bold
-//       out.innerHTML = "";
-//       j.matches.forEach(m => {
-//         const div = document.createElement("div");
-//         div.style.marginBottom = "1rem";
-//         // Title bold: Title: <title>
-//         const title = document.createElement("div");
-//         title.innerHTML = "<strong>Title:</strong> " + escapeHtml(m.title);
-//         div.appendChild(title);
-//         const url = document.createElement("div");
-//         url.innerHTML = "<strong>URL:</strong> <a href=\"" + escapeHtml(m.url) + "\" target=\"_blank\">" + escapeHtml(m.url) + "</a>";
-//         div.appendChild(url);
-//         const snippet = document.createElement("div");
-//         snippet.innerHTML = "<strong>Snippet:</strong> " + escapeHtml(m.snippet);
-//         div.appendChild(snippet);
-//         const mt = document.createElement("div");
-//         mt.innerHTML = "<strong>Matched_terms:</strong> " + escapeHtml(Array.isArray(m.matched_terms) ? m.matched_terms.join(", ") : m.matched_terms);
-//         div.appendChild(mt);
-//         out.appendChild(div);
-//       });
-//     } else if (j.reply && typeof j.reply === "string") {
-//       out.innerHTML = escapeHtml(j.reply);
-//     } else {
-//       out.innerHTML = "No results";
-//     }
-//   } catch (err) {
-//     out.textContent = "Error: " + err.message;
-//   }
-// });
-
-// function escapeHtml(s) {
-//   return String(s).replace(/[&<>"']/g, function (m) {
-//     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[m]);
-//   });
-// }
-
-

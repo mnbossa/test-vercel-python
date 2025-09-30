@@ -28,9 +28,7 @@ USER_AGENT = "agri-proxy/1.0"
 
 FALLBACK_EXACT = "I can only search AGRI committee documents; no matching documents found."
 
-# Build strict system + few-shot messages so the worker's LLM call returns
-# either the exact fallback string or a JSON array of query strings.
-SYSTEM_MSG = (
+DEFAULT_SYSTEM_MSG = (
     "You are an AGRI documents search assistant that only decides whether a user input is a valid search request "
     "for European Parliament AGRI committee documents. Do not act as a general assistant. If the input is NOT a valid "
     "AGRI documents search, output exactly this single-line string (no quotes, no extra whitespace, nothing else):\n"
@@ -175,19 +173,24 @@ def search_agri(query: str, doc_type: str | None = None, max_candidates: int = 5
             candidates = filtered
     return candidates
 
-def call_worker_classify(user_text: str, debug: bool = False) -> dict:
+def call_worker_classify(user_text: str, system_msg = None, debug: bool = False) -> dict:
     if not WORKER_URL or not SECRET:
         return {"ok": False, "error": "server configuration missing"}
     ts = int(time.time())
     nonce = secrets.token_hex(8)
+
+    # Use the system message provided by the client when present; otherwise use default.
+    system_message_to_send = system_msg if (system_msg and isinstance(system_msg, str) and system_msg.strip()) else DEFAULT_SYSTEM_MSG
+    
     messages = [
-        {"role": "system", "content": SYSTEM_MSG},
-        {"role": "user", "content": EXAMPLE_USER_1},
-        {"role": "assistant", "content": EXAMPLE_ASSISTANT_1},
-        {"role": "user", "content": EXAMPLE_USER_2},
-        {"role": "assistant", "content": EXAMPLE_ASSISTANT_2},
+        {"role": "system", "content": system_message_to_send},
         {"role": "user", "content": user_text},
-        ]    
+        ]
+# examples:
+#        {"role": "user", "content": "Find final AGRI recommendations about CAP Strategic Plans amendment time period"},
+#        {"role": "assistant", "content": '["CAP Strategic plans amendment final recommendation","CAP Strategic plans amendment time period recommendation 2025"]'},
+#        {"role": "user", "content": "What is the capital of Belgium?"},
+#        {"role": "assistant", "content": "I can only search AGRI committee documents; no matching documents found."},
     envelope = {"model": MODEL, "messages": messages, "stream": False, "timestamp": ts, "nonce": nonce}
     envelope_json = compact_json(envelope)
     sig = sign_envelope_bytes(envelope_json, SECRET.strip())
@@ -277,7 +280,8 @@ def proxy():
     if not user_text or not isinstance(user_text, str):
         return jsonify({"error": "missing or invalid text field"}), 400
     # Classify via worker
-    worker_ret = call_worker_classify(user_text, debug=debug)
+    system_msg = body.get("system_msg")
+    worker_ret = call_worker_classify(user_text, system_msg, debug=debug)
     if not worker_ret.get("ok"):
         # If debug requested, pass debug_info through
         error_payload = {"error": "worker classification failed", "detail": worker_ret}

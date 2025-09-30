@@ -282,42 +282,43 @@ def proxy():
     # Classify via worker
     system_msg = body.get("system_msg")
     worker_ret = call_worker_classify(user_text, system_msg, debug=debug)
-    if not worker_ret.get("ok"):
-        # If debug requested, pass debug_info through
-        error_payload = {"error": "worker classification failed", "detail": worker_ret}
-        return jsonify(error_payload), 502
-    if worker_ret["type"] == "fallback":
-        # Friendly reply
-        payload = {"reply": "No documents found", "matches": []}
-        if debug:
-            payload["debug_info"] = worker_ret.get("debug_info", {})
-        return jsonify(payload), 200
-    queries = worker_ret.get("queries", [])
-    if not queries:
-        payload = {"reply": "No documents found", "matches": []}
-        if debug:
-            payload["debug_info"] = worker_ret.get("debug_info", {})
-        return jsonify(payload), 200
-    # Execute web searches
-    aggregated = []
-    seen_urls = set()
-    for q in queries:
-        logger.info("Searching AGRI for query=%s doc_type=%s", q, doc_type)
-        results = search_agri(q, doc_type=doc_type, max_candidates=40)
-        for r in results:
-            if r["url"] in seen_urls:
-                continue
-            aggregated.append({"source_query": q, **r})
-            seen_urls.add(r["url"])
-    if not aggregated:
-        payload = {"reply": "No documents found", "matches": []}
-        if debug:
-            payload["debug_info"] = worker_ret.get("debug_info", {})
-        return jsonify(payload), 200
-    payload = {"reply": "matches", "matches": aggregated}
-    if debug:
-        payload["debug_info"] = worker_ret.get("debug_info", {})
-    return jsonify(payload), 200
+    return jsonify(worker_ret), 200
+    # if not worker_ret.get("ok"):
+    #     # If debug requested, pass debug_info through
+    #     error_payload = {"error": "worker classification failed", "detail": worker_ret}
+    #     return jsonify(error_payload), 502
+    # if worker_ret["type"] == "fallback":
+    #     # Friendly reply
+    #     payload = {"reply": "No documents found", "matches": []}
+    #     if debug:
+    #         payload["debug_info"] = worker_ret.get("debug_info", {})
+    #     return jsonify(payload), 200
+    # queries = worker_ret.get("queries", [])
+    # if not queries:
+    #     payload = {"reply": "No documents found", "matches": []}
+    #     if debug:
+    #         payload["debug_info"] = worker_ret.get("debug_info", {})
+    #     return jsonify(payload), 200
+    # # Execute web searches
+    # aggregated = []
+    # seen_urls = set()
+    # for q in queries:
+    #     logger.info("Searching AGRI for query=%s doc_type=%s", q, doc_type)
+    #     results = search_agri(q, doc_type=doc_type, max_candidates=40)
+    #     for r in results:
+    #         if r["url"] in seen_urls:
+    #             continue
+    #         aggregated.append({"source_query": q, **r})
+    #         seen_urls.add(r["url"])
+    # if not aggregated:
+    #     payload = {"reply": "No documents found", "matches": []}
+    #     if debug:
+    #         payload["debug_info"] = worker_ret.get("debug_info", {})
+    #     return jsonify(payload), 200
+    # payload = {"reply": "matches", "matches": aggregated}
+    # if debug:
+    #     payload["debug_info"] = worker_ret.get("debug_info", {})
+    # return jsonify(payload), 200
 
 if __name__ == "__main__":
     app.run(port=8000, debug=True)

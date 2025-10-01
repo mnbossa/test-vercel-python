@@ -3,3 +3,4 @@ __pycache__/
 .env
 
 testVercel.txt
+not_used.py

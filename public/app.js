@@ -3,6 +3,18 @@ const DEFAULT_SYSTEM_MSG = `You are an AGRI documents search assistant that only
 I can only search AGRI committee documents; no matching documents found.
 If the input IS a valid AGRI documents search, output only a JSON array of one or more plain search-term strings (only the array, nothing else). Each element must be a short query string suitable to run on the AGRI Documents Search page (for example: "CAP final recommendation 2025", "CAP Strategic plans amendment time period"). Do not output explanation, markup, reasoning, or any text outside the JSON array. The proxy will reject any output that is not exactly the fallback string or a JSON array of strings.`;
 
+function loadSessionId() {
+  let sid = localStorage.getItem("agri_session_id");
+  if (!sid) {
+    sid = null; // proxy will generate one on first request
+  }
+  return sid;
+}
+
+function saveSessionId(sid) {
+  if (sid) localStorage.setItem("agri_session_id", sid);
+}
+
 function setSystemTextarea(val) {
   const el = document.getElementById("system_msg");
   if (el) el.value = val;
@@ -42,7 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const go = document.getElementById("go");
   go.addEventListener("click", async () => {
     const qEl = document.getElementById("q");
-    const docTypeEl = document.getElementById("doc_type");
+    // const docTypeEl = document.getElementById("doc_type");
     const debugEl = document.getElementById("debug");
     const out = document.getElementById("out");
 
@@ -55,16 +67,20 @@ document.addEventListener("DOMContentLoaded", () => {
       out.textContent = "Please enter a query.";
       return;
     }
-    const doc_type = docTypeEl ? docTypeEl.value || undefined : undefined;
+    // const doc_type = docTypeEl ? docTypeEl.value || undefined : undefined;
     const debug = debugEl ? debugEl.checked : false;
     // include system_msg if user saved one (prefer local value)
     const system_msg = document.getElementById("system_msg").value || undefined;
+    const session_id = loadSessionId();
 
     out.textContent = "Sending request… (check console and Network tab)";
-    console.info("UI: sending search", { q, doc_type, debug, has_system: !!system_msg });
+    // console.info("UI: sending search", { q, doc_type, debug, has_system: !!system_msg });
+    console.info("UI: sending search", { q, debug, has_system: !!system_msg });
 
     try {
-      const payload = { text: q, doc_type, debug };
+      const payload = { text: q, debug };
+      // const payload = { text: q, doc_type, debug };
+      if (session_id) payload.session_id = session_id;
       if (system_msg) payload.system_msg = system_msg;
       const res = await fetch("/api/proxy", {
         method: "POST",

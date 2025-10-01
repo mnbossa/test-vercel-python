@@ -15,6 +15,10 @@ function saveSessionId(sid) {
   if (sid) localStorage.setItem("agri_session_id", sid);
 }
 
+function clearSessionId() {
+  localStorage.removeItem("agri_session_id");
+}
+
 function setSystemTextarea(val) {
   const el = document.getElementById("system_msg");
   if (el) el.value = val;
@@ -41,8 +45,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("save_sys").addEventListener("click", () => {
     saveSystemMsg();
+    clearSessionId(); // force a new session next request so memory is reset when system changes
     const out = document.getElementById("out");
-    out.textContent = "System message saved locally.";
+    out.textContent = "System message saved locally and session reset.";
   });
 
   document.getElementById("reset_sys").addEventListener("click", () => {
@@ -97,6 +102,10 @@ document.addEventListener("DOMContentLoaded", () => {
         console.error("Response is not JSON", e, text.slice(0,2000));
         out.textContent = "Non-JSON response. See console for raw body.";
         return;
+      }
+      // Save returned session_id so we reuse the same session for subsequent requests
+      if (j.session_id) {
+        saveSessionId(j.session_id);
       }
       if (!res.ok) {
         console.error("Server returned error", j);

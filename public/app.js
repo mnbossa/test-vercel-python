@@ -240,23 +240,31 @@ function attachTitleHandlers() {
   // Intercept anchor clicks so the toggle applies even when user clicks the title text
   document.querySelectorAll('.title-link').forEach(a => {
     a.addEventListener('click', function(ev) {
+      // prevent native navigation, middle-click, modifiers
       ev.preventDefault();
+      ev.stopImmediatePropagation();
+      // ignore clicks with modifier keys that the user intentionally wants to open elsewhere
+      if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
       const url = this.dataset.url;
       const filename = this.dataset.filename || filenameFromUrl(url);
       handleAction(url, filename);
     });
+    // also block context menu drag-n-drop quick-open behavior where needed
+    a.addEventListener('auxclick', function(ev) { ev.preventDefault(); ev.stopImmediatePropagation(); });
   });
 
   // Also wire explicit button
   document.querySelectorAll('.title-action').forEach(btn => {
     btn.addEventListener('click', function(ev) {
       ev.preventDefault();
+      ev.stopImmediatePropagation();
       const url = this.dataset.url;
       const filename = this.dataset.filename || filenameFromUrl(url);
       handleAction(url, filename);
     });
   });
 }
+
 
 async function handleAction(url, filename) {
   const processMode = document.getElementById('processToggle') && document.getElementById('processToggle').checked;

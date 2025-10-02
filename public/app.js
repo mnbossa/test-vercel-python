@@ -214,6 +214,7 @@ async function loadAgriTitles() {
       return `<div class="title-item"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a></div>`;
     }).join('');
     listEl.innerHTML = html;
+    attachTitleHandlers();
   } catch (err) {
     console.error('Failed to load AGRI titles', err);
     listEl.innerHTML = '<div class="titles-empty">Failed to load documents.</div>';
@@ -224,6 +225,130 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, function(m) {
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
   });
+}
+
+function filenameFromUrl(url) {
+  try {
+    const p = url.split('/').pop().split('?')[0] || 'file';
+    return decodeURIComponent(p);
+  } catch (e) {
+    return 'file';
+  }
+}
+
+function attachTitleHandlers() {
+  // Intercept anchor clicks so the toggle applies even when user clicks the title text
+  document.querySelectorAll('.title-link').forEach(a => {
+    a.addEventListener('click', function(ev) {
+      ev.preventDefault();
+      const url = this.dataset.url;
+      const filename = this.dataset.filename || filenameFromUrl(url);
+      handleAction(url, filename);
+    });
+  });
+
+  // Also wire explicit button
+  document.querySelectorAll('.title-action').forEach(btn => {
+    btn.addEventListener('click', function(ev) {
+      ev.preventDefault();
+      const url = this.dataset.url;
+      const filename = this.dataset.filename || filenameFromUrl(url);
+      handleAction(url, filename);
+    });
+  });
+}
+
+async function handleAction(url, filename) {
+  const processMode = document.getElementById('processToggle') && document.getElementById('processToggle').checked;
+  if (!processMode) {
+    // default: let the browser download the file directly
+    downloadDirect(url, filename);
+    return;
+  }
+
+  // process mode: call server endpoint that returns XLSX
+  try {
+    // show a minimal busy state
+    const prevLabel = setBusy(true, 'Processing...');
+    const resp = await fetch('/api/process', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url })
+    });
+    if (!resp.ok) {
+      let info = null;
+      try { info = await resp.json(); } catch (e) { /* ignore */ }
+      console.error('Processing failed', info || resp.statusText);
+      alert('Processing failed on server');
+      setBusy(false, prevLabel);
+      return;
+    }
+    const blob = await resp.blob();
+
+    // Determine filename for XLSX
+    const outName = (filename && filename.replace(/\.docx?$/i, '') + '_report.xlsx') || 'amendments_report.xlsx';
+    downloadBlob(blob, outName);
+    setBusy(false, prevLabel);
+  } catch (err) {
+    console.error(err);
+    alert('Network error while processing');
+    setBusy(false);
+  }
+}
+
+function downloadDirect(url, filename) {
+  // If same-origin or the resource supports CORS and Content-Disposition, this will prompt download.
+  // Fallback to programmatic fetch + blob for better control.
+  try {
+    // Try simple anchor download first
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || '';
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) {
+    // Fallback to fetch -> blob
+    fetch(url).then(r => {
+      if (!r.ok) throw new Error('Network response was not ok');
+      return r.blob();
+    }).then(blob => {
+      downloadBlob(blob, filename || filenameFromUrl(url));
+    }).catch(err => {
+      console.error('Direct download failed', err);
+      alert('Could not download file directly');
+    });
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.download = filename || 'file';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+}
+
+function setBusy(flag, prevLabel) {
+  // Minimal visual cue: disable the toggle and buttons while processing
+  const toggle = document.getElementById('processToggle');
+  const buttons = document.querySelectorAll('.title-action, .title-link');
+  if (flag) {
+    if (toggle) toggle.disabled = true;
+    buttons.forEach(b => b.disabled = true);
+    // return previous label to restore if provided
+    return prevLabel || null;
+  } else {
+    if (toggle) toggle.disabled = false;
+    buttons.forEach(b => b.disabled = false);
+    return null;
+  }
 }
 
 // call on DOMContentLoaded only once (keeps previous init in place)

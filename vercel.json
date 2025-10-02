@@ -4,6 +4,8 @@
     { "src": "/app.js", "dest": "/public/app.js" },
     { "src": "/titles", "dest": "/api/titles.py" },
     { "src": "/api/titles", "dest": "/api/titles.py" },
+    { "src": "/process", "dest": "/api/process.py" },
+    { "src": "/api/process", "dest": "/api/process.py" },
     { "src": "/api/(.*)", "dest": "/api/proxy.py" }
   ]
 }

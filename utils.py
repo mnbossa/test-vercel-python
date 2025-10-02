@@ -253,7 +253,7 @@ def get_spanish_party_abbreviation(full_name):
             return value
     return full_name # Return original if no specific abbreviation is found
 
-def process_meps_data(input_filepath='../data/meps.json'):
+def process_meps_data(input_filepath='data/meps.json'):
     """
     Reads MEP data, abbreviates political groups and Spanish national parties,
     and saves the processed data.

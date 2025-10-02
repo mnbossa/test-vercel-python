@@ -12,6 +12,15 @@
       #out { white-space: pre-wrap; background:#f7f7f7; padding:12px; border-radius:6px; margin-top:12px; max-height:400px; overflow:auto; }
       label { font-weight:600; margin-bottom:6px; display:block; }
       .small { font-size:0.9rem; color:#555; }
+
+      /* Titles panel */
+      #titles-panel { margin-top:18px; border:1px solid #e2e2e2; padding:12px; border-radius:6px; max-width:1000px; background:#fff; }
+      #titles-panel h2 { margin:0 0 8px 0; font-size:1.05rem; }
+      .title-item { padding:8px 6px; border-bottom:1px solid #f3f3f3; }
+      .title-item:last-child { border-bottom: none; }
+      .title-item a { color:#0645ad; text-decoration:none; }
+      .title-item a:hover { text-decoration:underline; }
+      .titles-empty { color:#666; padding:8px 6px; }
     </style>
   </head>
   <body>
@@ -31,11 +40,6 @@
 
     <div style="display:flex; gap:10px; margin-top:12px;">
       <input id="q" placeholder="Enter query (e.g., CAP)" style="flex:1">
-      <!-- <select id="doc_type">
-        <option value="">Any</option>
-        <option value="RECOMMENDATION">RECOMMENDATION</option>
-        <option value="DRAFT">DRAFT</option>
-      </select> -->
       <button id="go">Search</button>
     </div>
 

@@ -116,7 +116,7 @@ def titles_process_route():
             tb = traceback.format_exc()
             try: os.remove(tmp_path)
             except: pass
-            return ("application/json", 500, json.dumps({"error": "utils import failed", "detail": str(e)}))
+            return (json.dumps({"error": "utils import failed", "detail": str(e)}), 500, {"Content-Type":"application/json"})
 
         # parse and build DataFrame
         try:
@@ -126,7 +126,7 @@ def titles_process_route():
             tb = traceback.format_exc()
             try: os.remove(tmp_path)
             except: pass
-            return ("application/json", 500, json.dumps({"error": "processing failed", "detail": str(e)}))
+            return (json.dumps({"error": "processing failed", "detail": str(e)}), 500, {"Content-Type":"application/json"})
 
         # post-process DataFrame as in your original code
         try:
@@ -164,7 +164,7 @@ def titles_process_route():
         except Exception as e:
             try: os.remove(tmp_path)
             except: pass
-            return ("application/json", 500, json.dumps({"error":"excel export failed", "detail": str(e)}))
+            return (json.dumps({"error": "excel export failed", "detail": str(e)}), 500, {"Content-Type":"application/json"})
 
         try: os.remove(tmp_path)
         except: pass

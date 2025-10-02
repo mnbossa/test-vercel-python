@@ -87,7 +87,9 @@ def titles_process_route():
             body = {}
         file_url = body.get("url")
         if not file_url:
-            return ("application/json", 400, json.dumps({"error": "missing url"}))
+            # return ("application/json", 400, json.dumps({"error": "missing url"}))
+            from flask import Response
+            return Response(json.dumps({"error":"missing url"}), status=400, mimetype="application/json")
 
         # download file into temp file
         import requests
@@ -164,7 +166,8 @@ def titles_process_route():
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Content-Disposition": 'attachment; filename="amendments_report.xlsx"'
         }
-        return (headers["Content-Type"], 200, content)
+        # return (headers["Content-Type"], 200, content)
+        return (content, 200, headers)
 
     except Exception as e:
         tb = traceback.format_exc()

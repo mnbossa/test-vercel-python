@@ -3,7 +3,6 @@
     { "src": "/", "dest": "/public/index.html" },
     { "src": "/app.js", "dest": "/public/app.js" },
     { "src": "/api/titles", "dest": "/api/titles.py" },
-    { "src": "/api/proxy", "dest": "/api/proxy.py" },
     { "src": "/api/(.*)", "dest": "/api/proxy.py" }
   ],
   "rewrites": [

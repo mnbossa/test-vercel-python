@@ -278,9 +278,8 @@ async function handleAction(url, filename) {
 
   // process mode: call server endpoint that returns XLSX
   try {
-    // show a minimal busy state
-    const prevLabel = setBusy(true, 'Processing...');
-    const resp = await fetch('/api/process', {
+    setBusy(true);
+    const resp = await fetch('/titles/process', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ url })
@@ -290,15 +289,14 @@ async function handleAction(url, filename) {
       try { info = await resp.json(); } catch (e) { /* ignore */ }
       console.error('Processing failed', info || resp.statusText);
       alert('Processing failed on server');
-      setBusy(false, prevLabel);
+      setBusy(false);
       return;
     }
+    // XLSX binary expected
     const blob = await resp.blob();
-
-    // Determine filename for XLSX
     const outName = (filename && filename.replace(/\.docx?$/i, '') + '_report.xlsx') || 'amendments_report.xlsx';
     downloadBlob(blob, outName);
-    setBusy(false, prevLabel);
+    setBusy(false);
   } catch (err) {
     console.error(err);
     alert('Network error while processing');

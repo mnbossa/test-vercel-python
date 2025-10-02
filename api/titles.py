@@ -1,5 +1,5 @@
 # server/app.py
-from flask import Flask, jsonify, make_response
+from flask import Flask, jsonify, make_response, request, Response
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -80,16 +80,23 @@ def titles():
 def titles_process_route():
     import io, json, os, tempfile, traceback
     try:
-        # parse incoming JSON
+        # robust JSON parsing
         try:
-            body = json.loads(request.get_data().decode() if request.get_data() else "{}")
+            body = request.get_json(silent=True)
+            if body is None:
+                raw = request.get_data(as_text=True) or ""
+                try:
+                    body = json.loads(raw) if raw else {}
+                except Exception:
+                    body = {}
         except Exception:
             body = {}
-        file_url = body.get("url")
+        if not isinstance(body, dict):
+            body = {}
+        file_url = body.get("url") or body.get("file") or body.get("uri")
         if not file_url:
-            # return ("application/json", 400, json.dumps({"error": "missing url"}))
-            from flask import Response
-            return Response(json.dumps({"error":"missing url"}), status=400, mimetype="application/json")
+            app.logger.warning("titles_process_route: missing url in request body; raw body: %s", request.get_data(as_text=True))
+            return (json.dumps({"error":"missing url"}), 400, {"Content-Type":"application/json"})
 
         # download file into temp file
         import requests
@@ -171,7 +178,8 @@ def titles_process_route():
 
     except Exception as e:
         tb = traceback.format_exc()
-        return ("application/json", 500, json.dumps({"error":"unhandled", "detail": str(e)}))
+        app.logger.exception("titles_process_route: unhandled error")
+        return (json.dumps({"error":"unhandled", "detail": str(e)}), 500, {"Content-Type":"application/json"})
     
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)

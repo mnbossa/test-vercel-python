@@ -76,6 +76,99 @@ def titles():
         app.logger.exception("Failed to fetch titles")
         return make_response(jsonify([]), 200)
 
+@app.route("/titles/process", methods=["POST"])
+def titles_process_route():
+    import io, json, os, tempfile, traceback
+    try:
+        # parse incoming JSON
+        try:
+            body = json.loads(request.get_data().decode() if request.get_data() else "{}")
+        except Exception:
+            body = {}
+        file_url = body.get("url")
+        if not file_url:
+            return ("application/json", 400, json.dumps({"error": "missing url"}))
 
+        # download file into temp file
+        import requests
+        r = requests.get(file_url, headers={"User-Agent":"agri-processor/1.0"}, timeout=20)
+        r.raise_for_status()
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        with open(tmp_path, "wb") as f:
+            f.write(r.content)
+
+        # import utilities inside the handler
+        try:
+            from utils import parse_amendments, create_amendment_report
+            from utils import remove_unnec_tags, extract_additions, extract_deletions
+        except Exception as e:
+            tb = traceback.format_exc()
+            try: os.remove(tmp_path)
+            except: pass
+            return ("application/json", 500, json.dumps({"error": "utils import failed", "detail": str(e)}))
+
+        # parse and build DataFrame
+        try:
+            parsed = parse_amendments(tmp_path)
+            report_df = create_amendment_report(parsed)
+        except Exception as e:
+            tb = traceback.format_exc()
+            try: os.remove(tmp_path)
+            except: pass
+            return ("application/json", 500, json.dumps({"error": "processing failed", "detail": str(e)}))
+
+        # post-process DataFrame as in your original code
+        try:
+            report_df['Resumen'] = ''
+            report_df['Original'] = ''
+            report_df['Elimina'] = ''
+            report_df['Añade'] = ''
+            for i, a in enumerate(parsed.get('amendments', {}).values()):
+                if 'Propuesta de rechazo' in a.keys():
+                    report_df.loc[i, 'Resumen'] = 'rechazada'
+                else:
+                    try:
+                        A = remove_unnec_tags(a.get('Amended',''))
+                        report_df.loc[i, 'Añade'] = extract_additions(A)
+                    except Exception:
+                        report_df.loc[i, 'Añade'] = "(Comprobar!!)"
+                    try:
+                        C = remove_unnec_tags(a.get('Original',''))
+                        report_df.loc[i, 'Elimina'] = extract_deletions(C)
+                        report_df.loc[i, 'Original'] = a.get('OriginalType','')
+                    except Exception:
+                        report_df.loc[i, 'Elimina'] = "(Comprobar!!)"
+        except Exception:
+            # if helpers missing or other error, continue with what you have
+            pass
+
+        # write DataFrame to XLSX bytes
+        out = io.BytesIO()
+        try:
+            import pandas as pd
+            with pd.ExcelWriter(out, engine="openpyxl") as writer:
+                report_df.to_excel(writer, index=False, sheet_name="Report")
+            out.seek(0)
+            content = out.read()
+        except Exception as e:
+            try: os.remove(tmp_path)
+            except: pass
+            return ("application/json", 500, json.dumps({"error":"excel export failed", "detail": str(e)}))
+
+        try: os.remove(tmp_path)
+        except: pass
+
+        headers = {
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Content-Disposition": 'attachment; filename="amendments_report.xlsx"'
+        }
+        return (headers["Content-Type"], 200, content)
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        return ("application/json", 500, json.dumps({"error":"unhandled", "detail": str(e)}))
+    
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)

@@ -3,6 +3,7 @@
     { "src": "/", "dest": "/public/index.html" },
     { "src": "/app.js", "dest": "/public/app.js" },
     { "src": "/titles", "dest": "/api/titles.py" },
+    { "src": "/titles/process", "dest": "/api/titles.py" },
     { "src": "/api/titles", "dest": "/api/titles.py" },
     { "src": "/api/(.*)", "dest": "/api/proxy.py" }
   ]

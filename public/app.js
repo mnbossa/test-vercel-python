@@ -211,7 +211,8 @@ async function loadAgriTitles() {
     const html = items.map(it => {
       const safeTitle = escapeHtml(it.title || 'Untitled');
       const safeUrl = encodeURI(it.url || '#');
-      return `<div class="title-item"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a></div>`;
+      // return `<div class="title-item"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a></div>`;
+      return `<div class="title-item"><a class="title-link" href="#" data-url="${safeUrl}" data-filename="${filenameFromUrl(safeUrl)}" role="button" aria-label="Open ${safeTitle}">${safeTitle}</a><button class="title-action" type="button" data-url="${safeUrl}" data-filename="${filenameFromUrl(safeUrl)}">Download / Process</button></div>`;
     }).join('');
     listEl.innerHTML = html;
     attachTitleHandlers();

@@ -6,7 +6,7 @@ import hmac
 import hashlib
 import logging
 
-BACKEND = 'hf' # 'openai' # 'hf'
+BACKEND = 'openai' # 'hf'
 
 # for CloudFlare and HF
 WORKER_URL = os.environ.get("WORKER_URL")

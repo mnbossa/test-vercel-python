@@ -67,6 +67,7 @@ def call_hf_chat(payload: dict, debug: bool = False, timeout: int = 30) -> dict:
     if not worker_url or not shared_secret:
         return {"ok": False, "error": "server configuration missing"}
 
+    payload["model"] = HF_MODEL
     envelope_json = compact_json(payload)
     sig = sign_envelope_bytes(envelope_json, shared_secret.strip())
     target = worker_url.rstrip("/") + "/chat"

@@ -36,7 +36,7 @@ def call_openai_chat(payload):
         resp.raise_for_status()
         data = resp.json()
         assistant_content = data.get("choices", [])[0].get("message", {}).get("content", "")
-        return {"ok": True, "reply": assistant_content, "raw": data}
+        return {"ok": True, "reply": 'OAI: '+ assistant_content, "raw": data}
     except requests.exceptions.RequestException as e:
         return {"ok": False, "error": "openai request failed", "detail": str(e)}
     

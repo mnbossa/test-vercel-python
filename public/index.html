@@ -26,15 +26,32 @@
   <body>
     <h1>AImend</h1>
 
+<div style="display:flex; gap:12px; align-items:flex-start;">
+  <div style="flex:1;">
     <label for="system_msg">SYSTEM_MSG (editable). Edit, then click Save to store locally.</label>
     <textarea id="system_msg"></textarea>
-    <div class="row">
+    <div class="row" style="margin-top:8px;">
       <div class="controls">
         <button id="save_sys">Save system message</button>
         <button id="reset_sys">Reset to default</button>
       </div>
       <div class="small">Saved in browser localStorage; sent to proxy when Search is clicked.</div>
     </div>
+  </div>
+
+  <div style="flex:1;">
+    <label for="system_msg_filter" style="font-weight:600; margin-bottom:6px; display:block;">FILTER_AGENT_MSG (editable). Edit, then click Save to store locally.</label>
+    <textarea id="system_msg_filter"></textarea>
+    <div class="row" style="margin-top:8px;">
+      <div class="controls">
+        <button id="save_filter_sys">Save filter message</button>
+        <button id="reset_filter_sys">Reset filter to default</button>
+      </div>
+      <div class="small">Saved in browser localStorage; used by client-side filtering logic.</div>
+    </div>
+  </div>
+</div>
+
 
     <hr>
 

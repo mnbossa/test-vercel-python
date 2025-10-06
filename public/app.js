@@ -74,6 +74,8 @@ const DEFAULT_SYSTEM_MSG = `You are an AGRI documents search assistant that cond
 
 // - You must NOT produce the final line unless either (a) you have already asked at least one clarifying question in this interview and received a substantive answer, or (b) the user wrote the exact command "Proceed with search".
 
+const DEFAULT_FILTER_SYSTEM_MSG = `You are the Filter Agent. Your job is to study the conversation produced by the primary assistant and produce a short structured filter instruction that will be applied to the titles/results list. Respond with plain text instructions only.`;
+
 function loadSessionId() {
   let sid = localStorage.getItem("agri_session_id");
   if (!sid) {
@@ -90,14 +92,14 @@ function clearSessionId() {
   localStorage.removeItem("agri_session_id");
 }
 
-function setSystemTextarea(val) {
-  const el = document.getElementById("system_msg");
-  if (el) el.value = val;
+function setTextareaById(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.value = text;
 }
 
 function loadSystemMsg() {
   const stored = localStorage.getItem("agri_system_msg");
-  setSystemTextarea(stored || DEFAULT_SYSTEM_MSG);
+  setTextareaById("system_msg", stored || DEFAULT_SYSTEM_MSG);
 }
 
 function saveSystemMsg() {
@@ -108,11 +110,30 @@ function saveSystemMsg() {
 
 function resetSystemMsg() {
   localStorage.removeItem("agri_system_msg");
-  setSystemTextarea(DEFAULT_SYSTEM_MSG);
+  setTextareaById("system_msg", stored || DEFAULT_SYSTEM_MSG);
+}
+
+
+// Filter system message load/save/reset
+function loadFilterSystemMsg() {
+  const stored = localStorage.getItem("agri_system_msg_filter");
+  setTextareaById("system_msg_filter", stored || DEFAULT_FILTER_SYSTEM_MSG);
+}
+
+function saveFilterSystemMsg() {
+  const val = document.getElementById("system_msg_filter").value;
+  localStorage.setItem("agri_system_msg_filter", val);
+  console.info("Saved filter system message to localStorage (starts):", val.slice(0,200));
+}
+
+function resetFilterSystemMsg() {
+  localStorage.removeItem("agri_system_msg_filter");
+  setTextareaById("system_msg_filter", DEFAULT_FILTER_SYSTEM_MSG);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   loadSystemMsg();
+  loadFilterSystemMsg();
 
   document.getElementById("save_sys").addEventListener("click", () => {
     saveSystemMsg();
@@ -125,6 +146,19 @@ document.addEventListener("DOMContentLoaded", () => {
     resetSystemMsg();
     const out = document.getElementById("out");
     out.textContent = "System message reset to default.";
+  });
+
+  document.getElementById("save_filter_sys").addEventListener("click", () => {
+    saveFilterSystemMsg();
+    clearSessionId(); 
+    const out = document.getElementById("out");
+    out.textContent = "Filter system message saved locally.";
+  });
+
+  document.getElementById("reset_filter_sys").addEventListener("click", () => {
+    resetFilterSystemMsg();
+    const out = document.getElementById("out");
+    out.textContent = "Filter system message reset to default.";
   });
 
   const go = document.getElementById("go");
@@ -147,22 +181,26 @@ document.addEventListener("DOMContentLoaded", () => {
     const debug = debugEl ? debugEl.checked : false;
     // include system_msg if user saved one (prefer local value)
     const system_msg = document.getElementById("system_msg").value || undefined;
+    const system_msg_filter = document.getElementById("system_msg_filter").value || undefined;
+
     const session_id = loadSessionId();
 
     out.textContent = "Sending request… (check console and Network tab)";
     // console.info("UI: sending search", { q, doc_type, debug, has_system: !!system_msg });
-    console.info("UI: sending search", { q, debug, has_system: !!system_msg });
-
+    console.info("UI: sending search", { q, debug, has_system: !!system_msg, has_filter: !!system_msg_filter });
+    
     try {
       const payload = { text: q, debug };
       // const payload = { text: q, doc_type, debug };
       if (session_id) payload.session_id = session_id;
       if (system_msg) payload.system_msg = system_msg;
+      if (system_msg_filter) payload.system_msg_filter = system_msg_filter;
       const res = await fetch("/api/proxy", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
       });
+      
       console.info("Fetch completed", { ok: res.ok, status: res.status });
       const text = await res.text();
       console.info("Raw response text:", text.slice(0, 2000));

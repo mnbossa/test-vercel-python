@@ -143,8 +143,7 @@ def call_chat_filter(session_id: str,  system_msg_filter: str | None = None, *,
             docs_compact.append({
                 "id": t.get("id", i),
                 "index": i,
-                "title": t.get("title", "")[:256],
-                "snippet": t.get("snippet", "")[:300]
+                "title": t.get("title", "")
             })
 
         # Build user payload with structured JSON as the user message

@@ -74,10 +74,11 @@ const DEFAULT_SYSTEM_MSG = `You are an AGRI documents search assistant that cond
 
 // - You must NOT produce the final line unless either (a) you have already asked at least one clarifying question in this interview and received a substantive answer, or (b) the user wrote the exact command "Proceed with search".
 
-const DEFAULT_FILTER_SYSTEM_MSG = `You are the Filter Agent. Input: a JSON object with keys "conversation" (array of recent messages, each {role,content}) and "documents" (array of objects with keys id,index,title,snippet). 
+const DEFAULT_FILTER_SYSTEM_MSG = `You are the Filter Agent. Input: a JSON object with keys "conversation" (array of recent messages, each {role,content}) and "documents" (array of objects with keys id, index, title). 
 Your job: return only valid JSON with a single key "keep" whose value is an array of integer indices referring to documents to keep for further processing. 
 Example: {"keep":[0,2,5]}. 
-Rules: 1) Return JSON only, no explanation, no markdown. 
+Rules: 
+1) Return JSON only, no explanation, no markdown. 
 2) Use zero-based indices that refer to the order of the provided "documents" array. 
 3) If none match return {"keep": []}. 
 4) Limit output size; do not repeat input. 
@@ -178,7 +179,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
 // Render a list of compact title items into #titles-list
-// items: [{ id, index, title, url, snippet }, ...]
+// items: [{ id, index, title, url }, ...]
 function renderTitles(items) {
   const listEl = document.getElementById('titles-list');
   if (!listEl) return;

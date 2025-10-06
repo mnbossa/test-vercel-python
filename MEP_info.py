@@ -61,7 +61,6 @@ def get_mep_data(output_format='json'):
             
     if not meps_list:
         print("No MEP data could be extracted. This might be due to an incorrect XML structure assumption.")
-        print("Please inspect the XML structure from the URL or the printed snippet.")
 
     # Save to file
     if meps_list:

@@ -1,9 +1,8 @@
 # server/app.py
-from flask import Flask, jsonify, make_response, request, Response
+from flask import Flask, jsonify, make_response, request
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from urllib.parse import urlparse, unquote
 
 app = Flask(__name__)
 
@@ -67,17 +66,10 @@ def fetch_titles():
     return deduped
 
 
-def compact_snippet_from_title(title: str) -> str:
-    # return a short single-line snippet for the filter agent
-    if not title:
-        return ""
-    s = " ".join(title.split())
-    return s[:300]
-
 def get_titles_compact(max_items: int = 200):
     """
     Return a compact list of documents suitable to send to the filter agent.
-    Each item: { "id": <int>, "index": <int>, "title": <str>, "url": <str>, "snippet": <str> }
+    Each item: { "id": <int>, "index": <int>, "title": <str>, "url": <str>}
     This wraps fetch_titles() and is resilient: on error returns [].
     """
     try:
@@ -92,9 +84,8 @@ def get_titles_compact(max_items: int = 200):
             compact.append({
                 "id": it.get("id", i) if isinstance(it, dict) else i,
                 "index": i,
-                "title": (title or "")[:256],
-                "url": url or "",
-                "snippet": compact_snippet_from_title(title or "")
+                "title": (title or ""),
+                "url": url or ""
             })
         return compact
     except Exception:

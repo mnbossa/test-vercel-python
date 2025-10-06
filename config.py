@@ -15,7 +15,7 @@ HF_MODEL = os.environ.get("MODEL", "HuggingFaceTB/SmolLM3-3B:hf-inference")
 
 # for OpenAI
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
-OAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4")
+OAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini") # gpt-4o-mini
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 HEADERS = {

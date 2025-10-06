@@ -74,7 +74,23 @@ const DEFAULT_SYSTEM_MSG = `You are an AGRI documents search assistant that cond
 
 // - You must NOT produce the final line unless either (a) you have already asked at least one clarifying question in this interview and received a substantive answer, or (b) the user wrote the exact command "Proceed with search".
 
-const DEFAULT_FILTER_SYSTEM_MSG = `You are the Filter Agent. Your job is to study the conversation produced by the primary assistant and produce a short structured filter instruction that will be applied to the titles/results list. Respond with plain text instructions only.`;
+const DEFAULT_FILTER_SYSTEM_MSG = `You are the Filter Agent. Input: a JSON object with keys "conversation" (array of recent messages, each {role,content}) and "documents" (array of objects with keys id,index,title,snippet). 
+Your job: return only valid JSON with a single key "keep" whose value is an array of integer indices referring to documents to keep for further processing. 
+Example: {"keep":[0,2,5]}. 
+Rules: 1) Return JSON only, no explanation, no markdown. 
+2) Use zero-based indices that refer to the order of the provided "documents" array. 
+3) If none match return {"keep": []}. 
+4) Limit output size; do not repeat input. 
+5) Be conservative: prefer false negatives over false positives. 
+6) Respond deterministically; server will call you with temperature 0.0.`;
+
+// `You are the Filter Agent. Given a short conversation and a numbered list of documents, 
+// return only valid JSON with a single key \"keep\" whose value is an array of integer indices 
+// referring to the documents to keep. Example: {\"keep\": [0,2,5]}.
+// Do not include any other text or commentary. If no documents match, return {\"keep\": []}.
+// `
+
+
 
 function loadSessionId() {
   let sid = localStorage.getItem("agri_session_id");
@@ -161,6 +177,25 @@ document.addEventListener("DOMContentLoaded", () => {
     out.textContent = "Filter system message reset to default.";
   });
 
+// Render a list of compact title items into #titles-list
+// items: [{ id, index, title, url, snippet }, ...]
+function renderTitles(items) {
+  const listEl = document.getElementById('titles-list');
+  if (!listEl) return;
+  if (!Array.isArray(items) || items.length === 0) {
+    listEl.innerHTML = '<div class="titles-empty">No documents found.</div>';
+    return;
+  }
+  const html = items.map(it => {
+    const safeTitle = escapeHtml(it.title || 'Untitled');
+    const safeUrl = encodeURI(it.url || '#');
+    const filename = filenameFromUrl(safeUrl);
+    return `<div class="title-item"><a class="title-link" href="#" data-url="${safeUrl}" data-filename="${filename}" role="button" aria-label="Open ${safeTitle}">${safeTitle}</a></div>`;
+  }).join('');
+  listEl.innerHTML = html;
+  attachTitleHandlers();
+}
+
   const go = document.getElementById("go");
   go.addEventListener("click", async () => {
     const qEl = document.getElementById("q");
@@ -200,7 +235,7 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
       });
-      
+
       console.info("Fetch completed", { ok: res.ok, status: res.status });
       const text = await res.text();
       console.info("Raw response text:", text.slice(0, 2000));
@@ -221,11 +256,20 @@ document.addEventListener("DOMContentLoaded", () => {
         out.textContent = "Server error: " + (j.error || JSON.stringify(j));
         return;
       }
-      if (j.matches && j.matches.length) {
-        out.textContent = JSON.stringify(j.matches, null, 2);
+      if (j.filtered_titles && Array.isArray(j.filtered_titles) && j.filtered_titles.length) {
+        // Server produced a filtered list — render it directly
+        renderTitles(j.filtered_titles);
+        out.textContent = j.reply || "";
       } else {
+        // No filtered_titles: show assistant reply and fall back to full list
         out.textContent = j.reply || "No documents found";
-      }
+        loadAgriTitles();
+      }      
+      // if (j.matches && j.matches.length) {
+      //   out.textContent = JSON.stringify(j.matches, null, 2);
+      // } else {
+      //   out.textContent = j.reply || "No documents found";
+      // }
       if (j.debug_info) console.info("Debug info from server:", j.debug_info);
     } catch (err) {
       console.error("Fetch failed", err);

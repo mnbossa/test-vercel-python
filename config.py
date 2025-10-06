@@ -10,7 +10,7 @@ BACKEND = 'hf' # 'openai' # 'hf'
 
 # for CloudFlare and HF
 WORKER_URL = os.environ.get("WORKER_URL")
-SECRET = os.environ.get("SECRET")
+WORKER_SHARED_SECRET = os.environ.get("SECRET")
 HF_MODEL = os.environ.get("MODEL", "HuggingFaceTB/SmolLM3-3B:hf-inference")
 
 # for OpenAI
@@ -55,7 +55,7 @@ def call_hf_chat(payload: dict, debug: bool = False, timeout: int = 30) -> dict:
     Expects env vars:
       - WORKER_URL
       - WORKER_SHARED_SECRET
-    Returns normalized dict with keys similar to existing call_worker return:
+    Returns normalized dict:
       - ok: bool
       - reply: str (when ok)
       - worker_body: parsed JSON or text (when debug or on error)
@@ -63,7 +63,7 @@ def call_hf_chat(payload: dict, debug: bool = False, timeout: int = 30) -> dict:
       - error/detail when failure
     """
     worker_url = os.environ.get("WORKER_URL")
-    shared_secret = os.environ.get("WORKER_SHARED_SECRET")  # previously called SECRET
+    shared_secret = os.environ.get("WORKER_SHARED_SECRET")
     if not worker_url or not shared_secret:
         return {"ok": False, "error": "server configuration missing"}
 

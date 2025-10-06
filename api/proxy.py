@@ -1,15 +1,12 @@
 # api/proxy.py
 import time
 import json
-import hmac
-import hashlib
 import secrets
 import logging
-import requests
 from flask import Flask, request, jsonify
 import uuid
 from typing import Dict, Any
-from config import WORKER_URL, SECRET, MODEL
+from config import call_openai_chat, call_hf_chat, BACKEND 
 
 app = Flask(__name__)
 logger = logging.getLogger("agri-proxy")
@@ -41,27 +38,22 @@ def append_to_history(session_id: str, role: str, content: str):
 def compact_json(obj: dict) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
-def sign_envelope_bytes(envelope_json: str, secret: str) -> str:
-    mac = hmac.new(secret.encode("utf-8"), envelope_json.encode("utf-8"), hashlib.sha256)
-    return f"sha256={mac.hexdigest()}"
-
-def call_worker(user_text: str, system_msg: str | None = None, 
+def call_chat(user_text: str, system_msg: str | None = None, 
                 session_id: str | None = None, debug: bool = False) -> dict:
     """
-    Forward messages to the Cloudflare Worker and returns the 
-    worker's 'reply' content verbatim. Returns a dict:
+    Forward messages and returns the reply content verbatim. Returns a dict:
       - ok: bool
       - reply: str (when ok)
       - worker_body: parsed JSON (when debug or on error)
       - status_code: int (worker HTTP status)
       - error/detail keys on failure
+    Unified frontend for two backends:
+      - Cloudflare Worker (when BACKEND == "hf")
+      - OpenAI direct (when BACKEND == "openai")
     """
-    if not WORKER_URL or not SECRET:
-        return {"ok": False, "error": "server configuration missing"}
 
     ts = int(time.time())
     nonce = secrets.token_hex(8)
-    # choose system message provided by client or None (send only if present)
     messages = []
     if system_msg and isinstance(system_msg, str) and system_msg.strip():
         messages.append({"role": "system", "content": system_msg})
@@ -69,67 +61,41 @@ def call_worker(user_text: str, system_msg: str | None = None,
     if session_id:
         sess = CHAT_MEMORY.get(session_id)
         if sess and isinstance(sess.get("history"), list):
-            # copy the stored history into messages: these are prior assistant/user messages
             for entry in sess["history"]:
-                # only append valid entries of form {"role":..,"content":..}
                 if isinstance(entry, dict) and "role" in entry and "content" in entry:
                     messages.append({"role": entry["role"], "content": entry["content"]})
 
-    # append the current user message 
     messages.append({"role": "user", "content": user_text})
 
-    envelope = {"model": MODEL, "messages": messages, "stream": False, "timestamp": ts, "nonce": nonce}
-    envelope_json = compact_json(envelope)
-    sig = sign_envelope_bytes(envelope_json, SECRET.strip())
-    target = WORKER_URL.rstrip("/") + "/chat"
-    headers = {"Content-Type": "application/json", "X-Signature": sig}
+    payload = {"messages": messages, "stream": False, "timestamp": ts, "nonce": nonce}
 
-    logger.info("call_worker -> target=%s", target)
-    logger.info("envelope_head=%s", envelope_json[:800])
-    logger.info("signature_head=%s", sig[:120])
+    # Route to OpenAI directly
+    if BACKEND == "openai":
+        logger.info("call_worker -> routing to OpenAI (direct) model=%s", payload.get("model"))
+        # call_openai_chat expects a payload with keys "model" and "messages"
+        try:
+            oret = call_openai_chat(payload)
+        except Exception as e:
+            logger.exception("OpenAI call raised")
+            return {"ok": False, "error": "openai call exception", "detail": str(e)}
 
-    try:
-        resp = requests.post(target, headers=headers, data=envelope_json.encode("utf-8"), timeout=30)
-    except Exception as e:
-        logger.error("Error calling worker: %s", e)
-        return {"ok": False, "error": "worker unreachable", "detail": str(e)}
-
-    raw_text = resp.text or ""
-    status = resp.status_code
-
-    # if non-2xx return error + debug snippet
-    if status < 200 or status >= 300:
-        logger.error("Worker returned status %s body_head=%s", status, raw_text[:2000])
-        return {
-            "ok": False,
-            "error": "worker error",
-            "status_code": status,
-            "worker_body": raw_text[:2000],
-            "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}
-        }
-
-    # Try parse JSON and extract reply field if present
-    try:
-        body = resp.json()
-    except Exception:
-        # not JSON: return raw text as reply when debug requested, else error
+        # success
+        reply = oret.get("reply", "")
+        result = {"ok": True, "reply": reply, "status_code": 200}
         if debug:
-            return {"ok": True, "reply": raw_text, "worker_body": raw_text, "status_code": status, "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}}
-        return {"ok": False, "error": "worker returned non-json", "worker_body": raw_text[:2000]}
-
-    # Extract reply
-    if isinstance(body, dict) and "reply" in body:
-        reply = body.get("reply")
-        result = {"ok": True, "reply": reply, "status_code": status}
-        if debug:
-            result["worker_body"] = body
-            result["debug_info"] = {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}
+            result["worker_body"] = oret.get("raw", {})
+            result["debug_info"] = {"payload_head": compact_json(payload)[:800], "backend": "openai"}
         return result
 
-    # If no reply field, return body under worker_body (debug) or error
-    if debug:
-        return {"ok": True, "reply": json.dumps(body), "worker_body": body, "status_code": status, "debug_info": {"envelope_head": envelope_json[:800], "signature_head": sig[:120], "target": target}}
-    return {"ok": False, "error": "worker did not include reply", "worker_body": json.dumps(body)[:2000]}
+    # Call the existing Cloudflare Worker and huggingface
+    try:
+        hf_ret = call_hf_chat(payload, debug=debug)
+    except Exception as e:
+        logger.exception("call_hf_chat raised")
+        return {"ok": False, "error": "worker exception", "detail": str(e)}
+
+    return hf_ret
+    
 
 @app.route("/api/proxy", methods=["POST"])
 def proxy():
@@ -163,7 +129,7 @@ def proxy():
     append_to_history(session_id, "user", user_text)
 
     # Call the worker passing session_id and the effective system_msg
-    worker_ret = call_worker(user_text, system_msg=system_msg, session_id=session_id, debug=debug)
+    worker_ret = call_chat(user_text, system_msg=system_msg, session_id=session_id, debug=debug)
 
     # After call, append the assistant reply to history (if any)
     if worker_ret.get("ok") and "reply" in worker_ret and isinstance(worker_ret["reply"], str):

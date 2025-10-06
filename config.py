@@ -62,8 +62,8 @@ def call_hf_chat(payload: dict, debug: bool = False, timeout: int = 30) -> dict:
       - status_code: int
       - error/detail when failure
     """
-    worker_url = os.environ.get("WORKER_URL")
-    shared_secret = os.environ.get("WORKER_SHARED_SECRET")
+    worker_url = WORKER_URL
+    shared_secret = WORKER_SHARED_SECRET
     if not worker_url or not shared_secret:
         return {"ok": False, "error": "server configuration missing"}
 
